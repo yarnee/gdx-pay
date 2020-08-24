@@ -26,7 +26,7 @@ public final class FreeTrialPeriod {
                 case 'Y':
                     return YEAR;
                 default:
-                    throw new IllegalArgumentException("Character not mapped to TimeUnit: " + character);
+                    throw new IllegalArgumentException("Character not mapped to PeriodUnit: " + character);
             }
         }
     }

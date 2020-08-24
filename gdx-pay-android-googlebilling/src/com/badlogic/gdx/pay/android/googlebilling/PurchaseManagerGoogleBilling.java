@@ -170,30 +170,6 @@ public class PurchaseManagerGoogleBilling implements PurchaseManager, PurchasesU
 
     private Information convertSkuDetailsToInformation(SkuDetails skuDetails) {
         String priceString = skuDetails.getPrice();
-        // TODO: Google Play Introductory price
-//        skuDetails.getIntroductoryPrice()
-
-        /*
-Sample output, already subscribed:
-
-XXX Introductory details:Jaarlijks abonnement (Kinderen Talen Leren Met Emma)
-price:
-freeTrialPeriod: P3D
-priceAmountMicros: 0
-introductoryPriceCycles: 0
-introductoryPricePeriod:
-originalJson: {"skuDetailsToken":"XXXX","productId":"level_1_months_12","type":"subs","price":"€ 28,99","price_amount_micros":28990000,"price_currency_code":"EUR","subscriptionPeriod":"P1Y","freeTrialPeriod":"P3D","title":"Jaarlijks abonnement (Kinderen Talen Leren Met Emma)","description":"Toegang tot alle functionaliteit."}
-         */
-
-
-        System.out.println("XXX Introductory details:" + skuDetails.getTitle());
-        System.out.println("price: " + skuDetails.getIntroductoryPrice());
-        System.out.println("freeTrialPeriod: " + skuDetails.getFreeTrialPeriod());
-        System.out.println("priceAmountMicros: " + skuDetails.getIntroductoryPriceAmountMicros());
-        System.out.println("introductoryPriceCycles: " + skuDetails.getIntroductoryPriceCycles());
-        System.out.println("introductoryPricePeriod: " + skuDetails.getIntroductoryPricePeriod());
-        System.out.println("originalJson: " + skuDetails.getOriginalJson());
-
 
         return Information.newBuilder()
                 .localName(skuDetails.getTitle())
@@ -208,8 +184,6 @@ originalJson: {"skuDetailsToken":"XXXX","productId":"level_1_months_12","type":"
 
     /**
      * @param iso8601Duration in ISO 8601 format.
-     *
-     *</p>
      */
     @Nullable
     private FreeTrialPeriod parseFreeTrial(@Nullable  String iso8601Duration) {
@@ -220,7 +194,7 @@ originalJson: {"skuDetailsToken":"XXXX","productId":"level_1_months_12","type":"
         try {
             return convertToFreeTrialPeriod(iso8601Duration);
         } catch(RuntimeException e) {
-            Gdx.app.error(TAG, "Failed to parse freeTrialPeriod: " + iso8601Duration, e);
+            Gdx.app.error(TAG, "Failed to parse iso8601Duration: " + iso8601Duration, e);
             return null;
         }
     }
