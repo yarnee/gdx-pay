@@ -550,6 +550,12 @@ public class PurchaseManageriOSApple implements PurchaseManager {
         if (introductoryPrice == null || introductoryPrice.getSubscriptionPeriod() == null || introductoryPrice.getSubscriptionPeriod().getNumberOfUnits() == 0) {
             return null;
         }
+
+        if (introductoryPrice.getPrice() != null && introductoryPrice.getPrice().doubleValue() > 0f) {
+            // in that case, it is not a free trial. We do not yet support reduced price introductory offers.
+            return null;
+        }
+
         final SKProductSubscriptionPeriod subscriptionPeriod = introductoryPrice.getSubscriptionPeriod();
         return new FreeTrialPeriod( (int) subscriptionPeriod.getNumberOfUnits(), convertToPeriodUnit(subscriptionPeriod.getUnit()));
     }
