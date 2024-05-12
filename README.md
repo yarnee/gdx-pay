@@ -14,6 +14,8 @@ SNAPSHOT builds are published regularly on [https://oss.sonatype.org/content/rep
 * **Huawei (Android)**: [huawei](https://github.com/libgdx/gdx-pay/tree/master/gdx-pay-android-huawei)
 
 * **Apple (iOS)**: [RoboVM](https://github.com/libgdx/gdx-pay/tree/master/gdx-pay-iosrobovm-apple)
+* 
+* **Apple (iOS)**: [MOE] (https://github.com/libgdx/gdx-pay/tree/master/gdx-pay-iosmoe-apple)
 
 Click on the links to view the subproject's readme files for service-dependant information and artifacts.
 
@@ -24,7 +26,7 @@ The recommended way to use gdx-pay is via dependency management with Gradle or M
 *project-root/build.gradle:*
 
     ext {
-        gdxPayVersion = '1.3.7'
+        gdxPayVersion = '1.3.7-SNAPSHOT'
     }
 
 Add the following dependencies:

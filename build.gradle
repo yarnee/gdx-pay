@@ -71,7 +71,9 @@ ext {
 
 buildscript {
     ext {
-        roboVMVersion = '2.3.4'
+        gdxVersion = '1.10.1-SNAPSHOT'
+        roboVMVersion = '2.3.20'
+        moeVersion = '1.9.1-SNAPSHOT'
         unmockVersion = "0.7.0"
     }
 
@@ -83,8 +85,9 @@ buildscript {
         maven { url "https://oss.sonatype.org/content/repositories/snapshots/" }
     }
     dependencies {
-        classpath "com.android.tools.build:gradle:7.2.2"
+        classpath "com.android.tools.build:gradle:7.3.1"
         classpath "com.mobidevelop.robovm:robovm-gradle-plugin:${roboVMVersion}"
+        classpath "org.multi-os-engine:moe-gradle:${moeVersion}"
         classpath "de.mobilej.unmock:UnMockPlugin:${unmockVersion}"
     }
 }
