@@ -16,31 +16,62 @@
 
 package com.badlogic.gdx.pay.ios.apple;
 
-import apple.foundation.*;
+import com.badlogic.gdx.math.MathUtils;
+import com.badlogic.gdx.pay.FreeTrialPeriod;
+import com.badlogic.gdx.pay.GdxPayException;
+import com.badlogic.gdx.pay.Information;
+import com.badlogic.gdx.pay.Offer;
+import com.badlogic.gdx.pay.PurchaseManager;
+import com.badlogic.gdx.pay.PurchaseManagerConfig;
+import com.badlogic.gdx.pay.PurchaseObserver;
+import com.badlogic.gdx.pay.Transaction;
+
+import org.moe.natj.general.Pointer;
+import org.moe.natj.general.ann.Owned;
+import org.moe.natj.objc.ann.Selector;
+
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
+
+import javax.annotation.Nullable;
+
+import apple.foundation.NSArray;
+import apple.foundation.NSBundle;
+import apple.foundation.NSData;
+import apple.foundation.NSDate;
+import apple.foundation.NSError;
+import apple.foundation.NSLocale;
+import apple.foundation.NSMutableSet;
+import apple.foundation.NSNumberFormatter;
+import apple.foundation.NSURL;
 import apple.foundation.c.Foundation;
 import apple.foundation.enums.NSNumberFormatterBehavior;
 import apple.foundation.enums.NSNumberFormatterStyle;
-import apple.storekit.*;
+import apple.storekit.SKPayment;
+import apple.storekit.SKPaymentQueue;
+import apple.storekit.SKPaymentTransaction;
+import apple.storekit.SKProduct;
+import apple.storekit.SKProductDiscount;
+import apple.storekit.SKProductSubscriptionPeriod;
+import apple.storekit.SKProductsRequest;
+import apple.storekit.SKProductsResponse;
+import apple.storekit.SKReceiptRefreshRequest;
+import apple.storekit.SKRequest;
 import apple.storekit.enums.SKErrorCode;
 import apple.storekit.enums.SKPaymentTransactionState;
 import apple.storekit.protocol.SKPaymentTransactionObserver;
 import apple.storekit.protocol.SKProductsRequestDelegate;
 import apple.storekit.protocol.SKRequestDelegate;
-import com.badlogic.gdx.math.MathUtils;
-import com.badlogic.gdx.pay.*;
 
-import javax.annotation.Nullable;
-import java.util.ArrayList;
-import java.util.Date;
-import java.util.Iterator;
-import java.util.List;
-
-/** The purchase manager implementation for Apple's iOS IAP system (iOS-MOE).
+/**
+ * The purchase manager implementation for Apple's iOS IAP system (iOS-MOE).
  *
+ * @author Ioannis Giannakakis
  * @author HD_92 (BlueRiverInteractive)
  * @author noblemaster
  * @author alex-dorokhov
- * */
+ */
 public class PurchaseManageriOSApple implements PurchaseManager, SKPaymentTransactionObserver {
 
     static {
@@ -64,6 +95,7 @@ public class PurchaseManageriOSApple implements PurchaseManager, SKPaymentTransa
     private PurchaseManagerConfig config;
 
     private AppleTransactionObserver appleObserver;
+    private PromotionTransactionObserver startupTransactionObserver;
     private SKProductsRequest productsRequest;
     private NSArray<? extends SKProduct> products;
 
@@ -74,9 +106,9 @@ public class PurchaseManageriOSApple implements PurchaseManager, SKPaymentTransa
         return PurchaseManagerConfig.STORE_NAME_IOS_APPLE;
     }
 
-	/**
-     *  @param autoFetchInformation is not used, because without product information on ios it's not possible to fill
-     *  {@link Transaction} object on successful purchase
+    /**
+     * @param autoFetchInformation is not used, because without product information on ios it's not possible to fill
+     *                             {@link Transaction} object on successful purchase
      **/
     @Override
     public void install(PurchaseObserver observer, PurchaseManagerConfig config, boolean
@@ -95,6 +127,16 @@ public class PurchaseManageriOSApple implements PurchaseManager, SKPaymentTransa
             for (int i = 0; i < size; i++) {
                 productIdentifiers.addObject(config.getOffer(i).getIdentifierForStore
                         (PurchaseManagerConfig.STORE_NAME_IOS_APPLE));
+            }
+
+            if (appleObserver == null && startupTransactionObserver == null) {
+                // Installing intermediate observer to handle App Store promotions
+                startupTransactionObserver = PromotionTransactionObserver.alloc().init();
+                final SKPaymentQueue defaultQueue = SKPaymentQueue.defaultQueue();
+                defaultQueue.addTransactionObserver(startupTransactionObserver);
+                // FixME how to assigne addStrongReference????
+                // defaultQueue.addStrongRef(startupTransactionObserver);
+                log(LOGTYPELOG, "Startup purchase observer successfully installed!");
             }
 
             // Request configured offers/products.
@@ -137,29 +179,23 @@ public class PurchaseManageriOSApple implements PurchaseManager, SKPaymentTransa
     public void purchase(String identifier) {
         // Find the SKProduct for this identifier.
         Offer offer = config.getOffer(identifier);
-        if (offer == null) {
-            log(LOGTYPEERROR, "Invalid product identifier, " + identifier);
-            observer.handlePurchaseError(new InvalidItemException(identifier));
+        String identifierForStore = offer.getIdentifierForStore(PurchaseManagerConfig.STORE_NAME_IOS_APPLE);
+        SKProduct product = getProductByStoreIdentifier(identifierForStore);
+
+        if (product == null) {
+            // Product with this identifier not found: load product info first and try to purchase again
+            log(LOGTYPELOG, "Requesting product info for " + identifierForStore);
+            NSMutableSet<String> identifierForStoreSet =
+                    (NSMutableSet<String>) NSMutableSet.alloc().initWithCapacity(1);
+            identifierForStoreSet.addObject(identifierForStore);
+            productsRequest = SKProductsRequest.alloc().initWithProductIdentifiers(identifierForStoreSet);
+            productsRequest.setDelegate(new AppleProductsDelegatePurchase());
+            productsRequest.start();
         } else {
-            String identifierForStore = offer.getIdentifierForStore
-                    (PurchaseManagerConfig.STORE_NAME_IOS_APPLE);
-            SKProduct product = getProductByStoreIdentifier(identifierForStore);
-            if (product == null) {
-                // Product with this identifier not found: load product info first and try to purchase again
-                log(LOGTYPELOG, "Requesting product info for " + identifierForStore);
-                NSMutableSet<String> identifierForStoreSet = (NSMutableSet<String>) NSMutableSet
-                        .alloc().initWithCapacity(1);
-                identifierForStoreSet.addObject(identifierForStore);
-                productsRequest = SKProductsRequest.alloc().initWithProductIdentifiers
-                        (identifierForStoreSet);
-                productsRequest.setDelegate(new AppleProductsDelegatePurchase());
-                productsRequest.start();
-            } else {
-                // Create a SKPayment from the product and start purchase flow
-                log(LOGTYPELOG, "Purchasing product " + identifier + " ...");
-                SKPayment payment = SKPayment.paymentWithProduct(product);
-                ((SKPaymentQueue) SKPaymentQueue.defaultQueue()).addPayment(payment);
-            }
+            // Create a SKPayment from the product and start purchase flow
+            log(LOGTYPELOG, "Purchasing product " + identifier + " ...");
+            SKPayment payment = SKPayment.paymentWithProduct(product);
+            SKPaymentQueue.defaultQueue().addPayment(payment);
         }
     }
 
@@ -184,7 +220,9 @@ public class PurchaseManageriOSApple implements PurchaseManager, SKPaymentTransa
         return null;
     }
 
-    /** Returns the original and unique transaction ID of a purchase. */
+    /**
+     * Returns the original and unique transaction ID of a purchase.
+     */
     private String getOriginalTxID(SKPaymentTransaction transaction) {
         if (transaction != null) {
             if (transaction.originalTransaction() != null) {
@@ -200,7 +238,9 @@ public class PurchaseManageriOSApple implements PurchaseManager, SKPaymentTransa
         }
     }
 
-    /** Converts a purchase to our transaction object. */
+    /**
+     * Converts a purchase to our transaction object.
+     */
     @Nullable
     Transaction transaction(SKPaymentTransaction t) {
         SKPayment payment = t.payment();
@@ -228,7 +268,7 @@ public class PurchaseManageriOSApple implements PurchaseManager, SKPaymentTransa
         transaction.setOrderId(getOriginalTxID(t));
 
 
-        //TODO IG adjust like adviced in the libe below
+        //TODO IG adjust like adviced in the line below
         //transaction.setPurchaseTime(t.getTransactionDate() != null ? t.getTransactionDate().toDate() : new Date());
         transaction.setPurchaseTime(toJavaDate(t.transactionDate()));
         if (product != null) {
@@ -254,6 +294,17 @@ public class PurchaseManageriOSApple implements PurchaseManager, SKPaymentTransa
         } else {
             transaction.setTransactionData(null);
         }
+
+        // NOTE: although deprecated as of iOS 7, "transactionReceipt" is still available as of iOS 9 & hopefully long there after :)
+        String transactionDataSignature;
+        try {
+            NSData transactionReceipt = t.transactionReceipt();
+            transactionDataSignature = transactionReceipt.base64EncodedStringWithOptions(0);
+        } catch (Throwable e) {
+            log(LOGTYPELOG, "SKPaymentTransaction.transactionReceipt appears broken (was deprecated starting iOS 7.0).", e);
+            transactionDataSignature = null;
+        }
+        transaction.setTransactionDataSignature(transactionDataSignature);
 
         // return the transaction
         return transaction;
@@ -307,30 +358,22 @@ public class PurchaseManageriOSApple implements PurchaseManager, SKPaymentTransa
             products = response.products();
             log(LOGTYPELOG, products.size() + " products successfully received");
 
-            // Parse valid products
-            if (products != null && !products.isEmpty()) {
-                Iterator<? extends SKProduct> it = products.iterator();
-                while (it.hasNext()) {
-                    log(LOGTYPELOG, it.next().productIdentifier());
-                }
-            }
-
-            // Parse invalid products
-            NSArray<String> invalids = response.invalidProductIdentifiers();
-            if (invalids != null && !invalids.isEmpty()) {
-                Iterator<String> it = invalids.iterator();
-                while (it.hasNext()) {
-                    log(LOGTYPEERROR, "Invalid product received, " + it.next());
-                }
-            }
-
             final SKPaymentQueue defaultQueue = (SKPaymentQueue) SKPaymentQueue.defaultQueue();
 
             // Create and register our apple transaction observer.
-            appleObserver = AppleTransactionObserver.alloc().init();
-            appleObserver.purchaseManageriOSApple = PurchaseManageriOSApple.this;
-            defaultQueue.addTransactionObserver(appleObserver);
-            log(LOGTYPELOG, "Purchase observer successfully installed!");
+            if (appleObserver == null) {
+                if (startupTransactionObserver != null) {
+                    defaultQueue.removeTransactionObserver(startupTransactionObserver);
+                    startupTransactionObserver = null;
+                }
+
+                // Create and register our apple transaction observer.
+                appleObserver = AppleTransactionObserver.alloc().init();
+                appleObserver.purchaseManageriOSApple = PurchaseManageriOSApple.this;
+
+                defaultQueue.addTransactionObserver(appleObserver);
+                log(LOGTYPELOG, "Purchase observer successfully installed!");
+            }
 
             // notify of success...
             observer.handleInstall();
@@ -352,6 +395,19 @@ public class PurchaseManageriOSApple implements PurchaseManager, SKPaymentTransa
                     (error != null ? error.toString() : "unknown")));
         }
     }
+
+
+    // Transaction Observer for App Store promotions must be in place right after
+    // didFinishLaunching(). So this is installed at app start before our full
+    // AppleTransactionObserver is ready after fetching product information.
+    private class PromotionTransactionObserver extends SKPaymentTransactionObserverAdapter {
+
+        @Override
+        public boolean paymentQueueShouldAddStorePaymentForProduct(SKPaymentQueue queue, SKPayment payment, SKProduct product) {
+            return shouldProcessPromotionalStorePayment(queue, payment, product);
+        }
+    }
+
 
     void log(final int type, final String message) {
         log(type, message, null);
@@ -398,138 +454,144 @@ public class PurchaseManageriOSApple implements PurchaseManager, SKPaymentTransa
         return Information.UNAVAILABLE;
     }
 
-    @Override
-    public String toString() {
-        return PurchaseManagerConfig.STORE_NAME_IOS_APPLE;                // FIXME: shouldnt this be PurchaseManagerConfig.STORE_NAME_IOS_APPLE or storeName() ??!!
+
+    private FreeTrialPeriod convertToFreeTrialPeriod(SKProduct product) {
+        if (!IosVersion.is_11_2_orAbove()) {
+            // introductoryPrice is introduced in ios 11.2
+            return null;
+        }
+
+        final SKProductDiscount introductoryPrice = product.introductoryPrice();
+        if (introductoryPrice == null || introductoryPrice.subscriptionPeriod() == null || introductoryPrice.subscriptionPeriod().numberOfUnits() == 0) {
+            return null;
+        }
+
+        if (introductoryPrice.price() != null && introductoryPrice.price().doubleValue() > 0D) {
+            // in that case, it is not a free trial. We do not yet support reduced price introductory offers.
+            return null;
+        }
+
+        final SKProductSubscriptionPeriod subscriptionPeriod = introductoryPrice.subscriptionPeriod();
+        return new FreeTrialPeriod(
+                (int) subscriptionPeriod.numberOfUnits(),
+                SKProductPeriodUnitToPeriodUnitConverter.convertToPeriodUnit(subscriptionPeriod.unit())
+        );
     }
 
-    /*
-    SKPaymentTransactionObserver
+    @Override
+    public String toString() {
+        return PurchaseManagerConfig.STORE_NAME_IOS_APPLE;
+    }
+
+
+    /**
+     * Override this method in an own subclass if you need to change the default behaviour for promotional
+     * App Store payments. The default behaviour adds the store payment to the payment queue and processes
+     * it as soon as the product information is available.
      */
+    @SuppressWarnings("WeakerAccess")
+    protected boolean shouldProcessPromotionalStorePayment(SKPaymentQueue queue, SKPayment payment, SKProduct product) {
+        return true;
+    }
+
 
     @Override
-    public void paymentQueueUpdatedTransactions(SKPaymentQueue queue, NSArray<? extends
-            SKPaymentTransaction> transactions) {
+    public void paymentQueueUpdatedTransactions(SKPaymentQueue queue, NSArray<? extends SKPaymentTransaction> transactions) {
         for (final SKPaymentTransaction transaction : transactions) {
             long state = transaction.transactionState();
             switch ((int) state) {
+                // Product was successfully purchased.
                 case (int) SKPaymentTransactionState.Purchased:
-                    // Product was successfully purchased.
-
                     // Parse transaction data.
                     final Transaction t = transaction(transaction);
                     if (t == null) {
                         break;
                     }
 
-                    // Find transaction receipt if not set, i.e. t.setTransactionDataSignature() == null
-                    // NOTE: - as long as SKPaymentTransaction.transactionReceipt is not removed but only deprecated, let's use it
-                    //       - FIXME: the function below sends ALL receipts, not just the one we need: we need to parse it out (does NOT work right now)!
-                    //       - FIXME: the function below should be added also to restore(): this only gets used for direct-purchases ONLY!
-                    //       - parsing "NSBundle.getMainBundle().getAppStoreReceiptURL();": https://developer.apple.com/library/ios/releasenotes/General/ValidateAppStoreReceipt/Chapters/ValidateLocally.html#//apple_ref/doc/uid/TP40010573-CH1-SW19
-                    //         parsing is not for the faint of heart: lots of low-level coding :-/
-                    //            --> we will use the deprecated feature as long as we can or a volunteer comes forward!
-                    //            --> Apple might also provider better tooling support to parse out specific receipts in the future (yeah, that's going to happen...)
                     if (t.getTransactionDataSignature() == null) {
                         NSURL receiptURL = NSBundle.mainBundle().appStoreReceiptURL();
-
                         NSData receipt = NSData.dataWithContentsOfURL(receiptURL);
                         if (receipt == null) {
                             log(LOGTYPELOG, "Fetching receipt...");
-                            final SKReceiptRefreshRequest request = SKReceiptRefreshRequest.alloc().init();
+                            final SKReceiptRefreshRequest request = SKReceiptRefreshRequest.alloc();
                             request.setDelegate(new SKRequestDelegate() {
 
-                                @Override
-                                public void requestDidFinish(SKRequest r) {
+                                public void didFinish (SKRequest r) {
                                     // Receipt refresh request finished.
-                                    if (r.equals(request)) {
-                                        NSURL receiptURL = NSBundle.mainBundle()
-                                                .appStoreReceiptURL();
-                                        NSData receipt = NSData.dataWithContentsOfURL(receiptURL);
-                                        String encodedReceipt = receipt
-                                                .base64EncodedStringWithOptions(0);
 
+                                    if (r.equals(request)) {
+                                        NSURL receiptURL = NSBundle.mainBundle().appStoreReceiptURL();
+                                        NSData receipt = NSData.dataWithContentsOfURL(receiptURL);
+                                        String encodedReceipt = receipt.base64EncodedStringWithOptions(0);
+                                        //NSDataBase64EncodingOptions.None
                                         // FIXME: parse out actual receipt for this IAP purchase:
-                                        t.setTransactionDataSignature(encodedReceipt);
+                                        //                      t.setTransactionDataSignature(encodedReceipt);
                                         log(LOGTYPELOG, "Receipt was fetched!");
                                     } else {
-                                        log(LOGTYPEERROR, "Receipt fetching failed: Request " +
-                                                "doesn't equal initial request!");
+                                        log(LOGTYPEERROR, "Receipt fetching failed: Request doesn't equal initial request!");
                                     }
-                                    log(LOGTYPELOG, "Transaction was completed: " +
-                                            getOriginalTxID(transaction));
+
+                                    log(LOGTYPELOG, "Transaction was completed: " + getOriginalTxID(transaction));
                                     observer.handlePurchase(t);
+
                                     // Finish transaction.
-                                    ((SKPaymentQueue) SKPaymentQueue.defaultQueue())
-                                            .finishTransaction(transaction);
+                                    SKPaymentQueue.defaultQueue().finishTransaction(transaction);
                                 }
 
-                                @Override
-                                public void requestDidFailWithError(SKRequest request, NSError
-                                        error) {
+                                public void didFail (SKRequest request, NSError error) {
                                     // Receipt refresh request failed. Let's just continue.
-                                    log(LOGTYPEERROR, "Receipt fetching failed: " + error
-                                            .toString());
-                                    log(LOGTYPELOG, "Transaction was completed: " +
-                                            getOriginalTxID(transaction));
+                                    log(LOGTYPEERROR, "Receipt fetching failed: " + error.toString());
+                                    log(LOGTYPELOG, "Transaction was completed: " + getOriginalTxID(transaction));
                                     observer.handlePurchase(t);
 
                                     // Finish transaction.
-                                    ((SKPaymentQueue) SKPaymentQueue.defaultQueue())
-                                            .finishTransaction(transaction);
+                                    SKPaymentQueue.defaultQueue().finishTransaction(transaction);
                                 }
                             });
                             request.start();
                         } else {
                             String encodedReceipt = receipt.base64EncodedStringWithOptions(0);
-
+                            // NSDataBase64EncodingOptions.None == 0
                             // FIXME: parse out actual receipt for this IAP purchase:
-                            t.setTransactionDataSignature(encodedReceipt);
+                            //                  t.setTransactionDataSignature(encodedReceipt);
 
-
-                            log(LOGTYPELOG, "Transaction was completed: " + getOriginalTxID
-                                    (transaction));
+                            log(LOGTYPELOG, "Transaction was completed: " + getOriginalTxID(transaction));
                             observer.handlePurchase(t);
 
                             // Finish transaction.
-                            ((SKPaymentQueue) SKPaymentQueue.defaultQueue()).finishTransaction
-                                    (transaction);
-
+                            SKPaymentQueue.defaultQueue().finishTransaction(transaction);
                         }
-                    } else {
+                    }
+                    else {
                         // we are done: let's report!
-                        log(LOGTYPELOG, "Transaction was completed: " + getOriginalTxID
-                                (transaction));
+                        log(LOGTYPELOG, "Transaction was completed: " + getOriginalTxID(transaction));
                         observer.handlePurchase(t);
 
                         // Finish transaction.
-                        ((SKPaymentQueue) SKPaymentQueue.defaultQueue()).finishTransaction
-                                (transaction);
+                        SKPaymentQueue.defaultQueue().finishTransaction(transaction);
                     }
                     break;
-                case (int) SKPaymentTransactionState.Failed:
+                case (int)  SKPaymentTransactionState.Failed:
                     // Purchase failed.
 
                     // Decide if user cancelled or transaction failed.
                     NSError error = transaction.error();
                     if (error == null) {
-                        log(LOGTYPEERROR, "Transaction failed but error-object is null: " +
-                                transaction);
-                        observer.handlePurchaseError(new RuntimeException("Transaction failed: "
-                                + transaction));
-                    } else if (error.code() == SKErrorCode.PaymentCancelled) {
+                        log(LOGTYPEERROR, "Transaction failed but error-object is null: " + transaction);
+                        observer.handlePurchaseError(new GdxPayException("Transaction failed: " + transaction));
+                    }
+                    else if (error.code() == SKErrorCode.PaymentCancelled) {
                         log(LOGTYPEERROR, "Transaction was cancelled by user!");
                         observer.handlePurchaseCanceled();
                     } else {
                         log(LOGTYPEERROR, "Transaction failed: " + error.toString());
-                        observer.handlePurchaseError(new RuntimeException("Transaction failed: "
-                                + error.toString()));
+                        observer.handlePurchaseError(new GdxPayException("Transaction failed: " + error.localizedDescription()));
                     }
 
                     // Finish transaction.
-                    ((SKPaymentQueue) SKPaymentQueue.defaultQueue()).finishTransaction(transaction);
+                    SKPaymentQueue.defaultQueue().finishTransaction(transaction);
                     break;
-                case (int) SKPaymentTransactionState.Restored:
+                case (int)  SKPaymentTransactionState.Restored:
                     // A product has been restored.
 
                     // Parse transaction data.
@@ -540,10 +602,9 @@ public class PurchaseManageriOSApple implements PurchaseManager, SKPaymentTransa
                     restoredTransactions.add(ta);
 
                     // Finish transaction.
-                    ((SKPaymentQueue) SKPaymentQueue.defaultQueue()).finishTransaction(transaction);
+                    SKPaymentQueue.defaultQueue().finishTransaction(transaction);
 
-                    log(LOGTYPELOG, "Transaction has been restored: " + getOriginalTxID
-                            (transaction));
+                    log(LOGTYPELOG, "Transaction has been restored: " + getOriginalTxID(transaction));
                     break;
                 default:
                     break;
@@ -552,29 +613,25 @@ public class PurchaseManageriOSApple implements PurchaseManager, SKPaymentTransa
     }
 
     @Override
-    public void paymentQueueRestoreCompletedTransactionsFinished(SKPaymentQueue queue) {
+    public void paymentQueueRestoreCompletedTransactionsFinished (SKPaymentQueue queue) {
         // All products have been restored.
         log(LOGTYPELOG, "All transactions have been restored!");
-
-        observer.handleRestore(restoredTransactions.toArray(new Transaction[restoredTransactions
-                .size()]));
+        observer.handleRestore(restoredTransactions.toArray(new Transaction[restoredTransactions.size()]));
         restoredTransactions.clear();
     }
 
-    @Override
-    public void paymentQueueRestoreCompletedTransactionsFailedWithError(SKPaymentQueue queue,
-                                                                        NSError error) {
+
+    public void paymentQueueRestoreCompletedTransactionsFailedWithError (SKPaymentQueue queue, NSError error) {
         // Restoration failed.
 
         // Decide if user cancelled or transaction failed.
         if (error.code() == SKErrorCode.PaymentCancelled) {
             log(LOGTYPEERROR, "Restoring of transactions was cancelled by user!");
-            observer.handleRestoreError(new RuntimeException("Restoring of purchases was " +
-                    "cancelled by user!"));
+            observer.handleRestoreError(new GdxPayException("Restoring of purchases was cancelled by user!"));
         } else {
             log(LOGTYPEERROR, "Restoring of transactions failed: " + error.toString());
-            observer.handleRestoreError(new RuntimeException("Restoring of purchases failed: " +
-                    error.toString()));
+            observer.handleRestoreError(new GdxPayException("Restoring of purchases failed: " + error.localizedDescription()));
         }
     }
+
 }
